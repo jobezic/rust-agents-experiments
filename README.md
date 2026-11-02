@@ -1,16 +1,18 @@
 # Rust Agent Experiments
 
-A small project for exploring how to build agents in Rust and connect them to large language model APIs. It starts with a simple Gemini interaction: the program asks a model to write a Rust function, saves the generated source, and checks the output file. This is a first step for experimenting with agent behavior, tool use, and the surrounding Rust application structure.
+This project explores how to build agents in Rust that use LLM APIs to complete software tasks. The current experiment gives an agent a function specification, asks Gemini to implement it with unit tests, runs those tests, and sends any compiler or test failures back to the model for a correction.
 
-## Current experiment
+## Current workflow
 
-The application currently:
+The agent in `src/agent.rs` runs up to three attempts:
 
-1. Sends a code-generation prompt to the configured Gemini model.
-2. Extracts Rust source from the response, including responses wrapped in Markdown fences.
-3. Saves the source to `workspace/generated.rs` and checks that the file is non-empty.
+1. Ask Gemini to generate a complete Rust library source file for the requested function, including unit tests.
+2. Write the response to `workspace/src/lib.rs`.
+3. Run `cargo test --offline` in the isolated `workspace/` project.
+4. If compilation or tests fail, provide the source and command output to Gemini and ask it to fix the implementation.
+5. Stop when the tests pass or the attempt limit is reached.
 
-Compilation of the generated project is a possible next step; it is not currently run by the application.
+The current task, `calculate_average`, is defined in `src/main.rs`. It asks for the arithmetic average of a slice of `f64`, returning `None` for an empty slice.
 
 ## Configure
 
@@ -29,8 +31,8 @@ The application loads `.env` automatically. Keep your API key private and do not
 cargo run
 ```
 
-The prompt is currently defined in `src/main.rs`, so each run performs the same experiment. The generated source is written under `workspace/`.
+The generated project is stored in `workspace/`. Each run initializes its Cargo manifest and overwrites the generated library source.
 
-## Direction
+## Exploring next
 
-This repository is an evolving sandbox for learning and experimenting with Rust agents and LLM APIs. The initial Gemini example provides a working place to explore the request/response loop; future experiments can build on it with configurable tasks, tools, state, and validation.
+This is an early experiment in an agent loop: translate a task into code, use test results as feedback, and iterate. The task and retry limit are currently fixed in source; they can evolve as the project explores more flexible tasks, tools, and ways to evaluate generated changes.
