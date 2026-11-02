@@ -1,18 +1,19 @@
 # Rust Agent Experiments
 
-This project explores how to build agents in Rust that use LLM APIs to complete software tasks. The current experiment gives an agent a function specification, asks Gemini to implement it with unit tests, runs those tests, and sends any compiler or test failures back to the model for a correction.
+This project explores building software agents in Rust that use LLM APIs. The current experiment gives Gemini a Rust function task and a small set of tools. Gemini can write the generated source, run its tests, inspect the results, and request further changes through the same interaction.
 
-## Current workflow
+## Current experiment
 
-The agent in `src/agent.rs` runs up to three attempts:
+The task in `src/main.rs` asks for a `calculate_average` function that accepts a slice of `f64`, returns `None` for an empty slice, and otherwise returns the arithmetic average. The agent is instructed to include unit tests.
 
-1. Ask Gemini to generate a complete Rust library source file for the requested function, including unit tests.
-2. Write the response to `workspace/src/lib.rs`.
-3. Run `cargo test --offline` in the isolated `workspace/` project.
-4. If compilation or tests fail, provide the source and command output to Gemini and ask it to fix the implementation.
-5. Stop when the tests pass or the attempt limit is reached.
+The agent loop in `src/agent.rs` provides two tools:
 
-The current task, `calculate_average`, is defined in `src/main.rs`. It asks for the arithmetic average of a slice of `f64`, returning `None` for an empty slice.
+- `write_file` writes the implementation to `workspace/src/lib.rs`. The tool only permits this path.
+- `run_tests` runs `cargo test --offline` in the generated project and returns its output to Gemini.
+
+Gemini decides when to call each tool. Rust executes the requested tool and sends the result back as part of the ongoing interaction, so Gemini can revise the source and run the tests again. The agent allows up to 10 interaction iterations.
+
+The generated Cargo project lives in `workspace/`. Starting the program creates its directories and writes a Cargo manifest; generated source is written there by the `write_file` tool.
 
 ## Configure
 
@@ -31,8 +32,10 @@ The application loads `.env` automatically. Keep your API key private and do not
 cargo run
 ```
 
-The generated project is stored in `workspace/`. Each run initializes its Cargo manifest and overwrites the generated library source.
+The task is currently defined in `src/main.rs`. The generated project uses offline Cargo testing, so its dependencies must already be available locally; the generated manifest currently has no dependencies.
 
-## Exploring next
+## Current limitation
 
-This is an early experiment in an agent loop: translate a task into code, use test results as feedback, and iterate. The task and retry limit are currently fixed in source; they can evolve as the project explores more flexible tasks, tools, and ways to evaluate generated changes.
+The system instruction asks Gemini to finish only after tests pass, but the Rust loop currently treats a response with no tool calls as completion. It does not independently verify that `run_tests` was called successfully before returning. The 10-iteration limit is also a cap on interaction rounds, not a fixed number of test retries.
+
+This is an early experiment in tool use, feedback loops, and connecting model decisions to Rust code. The task, tools, and completion checks can evolve as the agent grows.

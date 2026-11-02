@@ -1,8 +1,4 @@
 use std::fs;
-use std::path::Path;
-
-const WORKSPACE: &str = "workspace";
-const SOURCE: &str = "workspace/src/lib.rs";
 
 pub struct Workspace;
 
@@ -28,12 +24,11 @@ edition = "2024"
         &self,
         code: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let path = Path::new(SOURCE);
-        fs::write(path, code)?;
+        fs::write("workspace/src/lib.rs", code)?;
         Ok(())
     }
 
     pub fn root(&self) -> &str {
-        WORKSPACE
+        "workspace"
     }
 }

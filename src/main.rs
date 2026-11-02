@@ -1,10 +1,11 @@
 mod agent;
-mod gemini_client;
 mod test_runner;
+mod tools;
 mod workspace;
 
+use gemini_rust::prelude::*;
+
 use agent::Agent;
-use gemini_client::GeminiClient;
 use workspace::Workspace;
 
 #[tokio::main]
@@ -14,16 +15,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("GEMINI_API_KEY")?;
     let model = std::env::var("GEMINI_MODEL")?;
 
-    // Initialize the LLM client.
-    let llm = GeminiClient::new(api_key, model)?;
+    let client = Gemini::new(api_key)?;
 
-    // Initialize the isolated workspace.
     let workspace = Workspace::initialize()?;
 
-    // Create the agent.
-    let agent = Agent::new(llm, workspace);
+    let agent = Agent::new(
+        client,
+        model,
+        workspace,
+    );
 
-    // Give the agent a task.
     let task = r#"
         Implement a function called calculate_average.
 
@@ -32,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         - Return Option<f64>.
         - Return None for an empty slice.
         - Return the arithmetic average otherwise.
-        - Include unit tests for normal input and empty input.
+        - Include unit tests.
     "#;
 
     agent.run(task).await?;

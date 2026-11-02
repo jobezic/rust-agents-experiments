@@ -1,93 +1,149 @@
-use crate::gemini_client::GeminiClient;
-use crate::test_runner::TestRunner;
-use crate::workspace::Workspace;
+use gemini_rust::prelude::*;
+use serde_json::Value;
 
-const MAX_ATTEMPTS: usize = 3;
+use crate::{tools::AgentTools, workspace::Workspace};
+
+const MAX_TOOL_CALLS: usize = 10;
 
 pub struct Agent {
-    llm: GeminiClient,
+    client: Gemini,
+    model: String,
     workspace: Workspace,
 }
 
 impl Agent {
-    pub fn new(llm: GeminiClient, workspace: Workspace) -> Self {
-        Self { llm, workspace }
+    pub fn new(
+        client: Gemini,
+        model: String,
+        workspace: Workspace,
+    ) -> Self {
+        Self {
+            client,
+            model,
+            workspace,
+        }
     }
 
     pub async fn run(
         &self,
         task: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut prompt = format!(
-            "You are a Rust software engineer.\n\
-             Implement the following task:\n\n\
-             {task}\n\n\
-             Requirements:\n\
-             - Generate a complete Rust library source file.\n\
-             - Include unit tests using #[cfg(test)].\n\
-             - Do not use external dependencies.\n\
-             - Return only Rust source code.\n\
-             - Do not include Markdown code fences."
-        );
+        let tools = AgentTools::definitions();
 
-        for attempt in 1..=MAX_ATTEMPTS {
-            println!("\n=== Agent attempt {attempt}/{MAX_ATTEMPTS} ===");
+        let mut previous_id: Option<String> = None;
 
-            // Ask Gemini to generate or fix the implementation.
-            let response = self.llm.generate(&prompt).await?;
+        let mut user_input = InteractionInput::text(task);
 
-            // Extract the Rust source.
-            let code = extract_code(&response);
+        for iteration in 1..=MAX_TOOL_CALLS {
+            println!("\n--- Agent iteration {iteration} ---");
 
-            // Write generated code.
-            self.workspace.write_source(code)?;
+            let mut builder = self.client
+                .create_interaction()
+                .with_model(&self.model)
+                .with_system_instruction(
+                    "You are a Rust coding agent.
 
-            println!("Generated source written.");
+                     You have access to two tools:
+                     - write_file: write Rust source code
+                     - run_tests: execute the Rust tests
 
-            // Execute the tests.
-            let result = TestRunner::run(self.workspace.root())?;
+                     Workflow:
+                     1. Understand the user's task.
+                     2. Generate a complete Rust implementation,
+                        including unit tests.
+                     3. Call write_file.
+                     4. Call run_tests.
+                     5. If tests fail, fix the implementation
+                        and repeat.
+                     6. If tests pass, provide a final summary.
 
-            println!("{}", result.feedback());
+                     Do not claim success unless run_tests succeeds."
+                );
 
-            if result.success {
-                println!("\nAgent completed successfully!");
+            for tool in &tools {
+                builder = builder.with_tool(tool.clone());
+            }
+
+            if let Some(ref id) = previous_id {
+                builder = builder.with_previous_interaction(id);
+            }
+
+            builder = match &user_input {
+                InteractionInput::Text(text) => {
+                    builder.with_text(text.clone())
+                }
+                InteractionInput::StepArray(steps) => {
+                    builder.with_step_input(steps.clone())
+                }
+                _ => builder,
+            };
+
+            let interaction = builder.execute().await?;
+
+            let function_calls: Vec<_> = interaction.steps
+                .iter()
+                .filter_map(|step| {
+                    if let Step::FunctionCall {
+                        name,
+                        arguments,
+                        id,
+                    } = step {
+                        Some((
+                            name.clone(),
+                            arguments.clone(),
+                            id.clone(),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // No function calls means Gemini has finished.
+            if function_calls.is_empty() {
+                println!(
+                    "\nAgent final response:\n{}",
+                    interaction.output_text()
+                );
                 return Ok(());
             }
 
-            if attempt == MAX_ATTEMPTS {
-                break;
+            let mut results = Vec::new();
+
+            for (name, args, call_id) in function_calls {
+                println!("Tool requested: {name}");
+                println!("Arguments: {args}");
+
+                let result: Value = match AgentTools::execute(
+                    &name,
+                    &args,
+                    &self.workspace,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => serde_json::json!({
+                        "success": false,
+                        "error": error
+                    }),
+                };
+
+                println!("Tool result: {result}");
+
+                results.push(Step::FunctionResult {
+                    name: Some(name),
+                    call_id,
+                    result: StepResult::from_json(result),
+                    is_error: None,
+                });
             }
 
-            // Give the LLM feedback from the compiler/test runner.
-            prompt = format!(
-                "Your previous Rust implementation failed.\n\n\
-                 Original task:\n{task}\n\n\
-                 Previous source code:\n\
-                 ```rust\n{code}\n```\n\n\
-                 Compiler and test feedback:\n{}\n\n\
-                 Fix the implementation and return the complete \
-                 corrected Rust source file. Include unit tests. \
-                 Return only Rust code without Markdown fences.",
-                result.feedback()
-            );
+            // Preserve the interaction context.
+            previous_id = interaction.id()
+                .map(|id| id.to_string());
 
-            println!("Tests failed. Asking Gemini to fix the code...");
+            // Send the tool results back to Gemini.
+            user_input = InteractionInput::step_array(results);
         }
 
-        Err("Agent failed after maximum attempts".into())
+        Err("Maximum tool-call iterations exceeded".into())
     }
-}
-
-fn extract_code(response: &str) -> &str {
-    let response = response.trim();
-
-    if let Some(code) = response.strip_prefix("```rust") {
-        return code.strip_suffix("```").unwrap_or(code).trim();
-    }
-
-    if let Some(code) = response.strip_prefix("```") {
-        return code.strip_suffix("```").unwrap_or(code).trim();
-    }
-
-    response
 }
